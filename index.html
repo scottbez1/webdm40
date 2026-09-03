@@ -1,0 +1,1463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DM40 Readout</title>
+<style>
+/* ─────────────────────────────────────────────────────────────
+   Tokens
+   ───────────────────────────────────────────────────────────── */
+:root {
+  --ink:      #0b0e13;
+  --panel:    #12171f;
+  --panel-2:  #171d27;
+  --rule:     #232b37;
+  --rule-hi:  #2f3947;
+  --text:     #e6ecf3;
+  --muted:    #6b7a8c;
+  --muted-hi: #90a0b2;
+  --danger:   #ff6b5e;
+  --live:     #4ade80;
+  --accent:   #f5a524;
+
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  --ui:   system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --r: 10px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--ink);
+  color: var(--text);
+  font-family: var(--ui);
+  -webkit-font-smoothing: antialiased;
+}
+body { display: grid; place-items: center; padding: 24px 16px; }
+body.bare { background: transparent; }
+
+/* ─────────────────────────────────────────────────────────────
+   Shell
+   ───────────────────────────────────────────────────────────── */
+.app {
+  position: relative;
+  width: 100%;
+  max-width: 430px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: blur(14px) saturate(1.1);
+  -webkit-backdrop-filter: blur(14px) saturate(1.1);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  overflow: hidden;
+  box-shadow: 0 12px 40px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.02) inset;
+}
+
+/* Header ─────────────────────────────────────────────────── */
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 8px 0 10px;
+  border-bottom: 1px solid var(--rule);
+  background: linear-gradient(180deg, rgba(255,255,255,.025), transparent);
+}
+
+.dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--muted); flex: none;
+  transition: background .2s, box-shadow .2s;
+}
+.app[data-state="live"] .dot { background: var(--live); box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 18%, transparent); }
+.app[data-state="connecting"] .dot { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+.app[data-state="error"] .dot { background: var(--danger); }
+@keyframes pulse { 0%,100% { opacity:.35 } 50% { opacity:1 } }
+
+.name {
+  font-size: 11px; font-weight: 600; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--muted-hi);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bar-gap { flex: 1; }
+
+.chips { display: flex; gap: 4px; }
+.chip {
+  font-size: 9px; font-weight: 700; letter-spacing: .1em;
+  padding: 3px 5px; border-radius: 3px;
+  color: var(--muted); background: var(--panel-2);
+  border: 1px solid var(--rule);
+  opacity: 0; transition: opacity .15s, color .15s, border-color .15s;
+}
+.chip.on { opacity: 1; color: var(--accent); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+
+/* Battery — five discrete pips, matching the meter's own 0–5 scale */
+.batt { display: none; align-items: center; gap: 3px; }
+.batt.show { display: flex; }
+.batt-pips { display: flex; gap: 1.5px; align-items: flex-end; }
+.pip {
+  width: 3px; height: 9px; border-radius: 1px;
+  background: var(--rule-hi);
+  transition: background .25s;
+}
+.pip.on { background: var(--muted-hi); }
+.batt.low .pip.on { background: var(--danger); }
+.batt.chg .pip.on { background: var(--live); }
+.batt-bolt { font-size: 9px; color: var(--live); line-height: 1; display: none; }
+.batt.chg .batt-bolt { display: block; }
+
+.iconbtn {
+  appearance: none;
+  border: 1px solid var(--rule);
+  background: var(--panel-2);
+  color: var(--muted-hi);
+  border-radius: 5px; height: 22px; padding: 0 7px;
+  font-family: var(--ui); font-size: 10px; font-weight: 600;
+  letter-spacing: .07em; text-transform: uppercase;
+  cursor: pointer; flex: none;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.iconbtn:hover { color: var(--text); border-color: var(--rule-hi); }
+.iconbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.iconbtn.active { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+
+/* Body ───────────────────────────────────────────────────── */
+.body { display: flex; }
+
+/* Items are fixed height and the group centres, so the rail no longer stretches
+   the panel taller than the reading it sits beside. */
+.rail {
+  width: 30px; flex: none;
+  border-right: 1px solid var(--rule);
+  display: flex; flex-direction: column; justify-content: center;
+  padding: 8px 0; gap: 1px;
+  background: rgba(0,0,0,.16);
+}
+.rail-item {
+  flex: none; height: 17px;
+  display: grid; place-items: center;
+  font-family: var(--mono); font-size: 11.5px;
+  color: var(--muted); opacity: .38;
+  position: relative; border: 0; background: none; padding: 0;
+  transition: opacity .18s, color .18s;
+}
+.rail-item.on { opacity: 1; color: var(--accent); }
+.rail-item.on::before {
+  content: ""; position: absolute; left: 0; top: 12%; bottom: 12%;
+  width: 2px; background: var(--accent); border-radius: 0 2px 2px 0;
+}
+.rail-item.live { cursor: pointer; }
+.rail-item.live:hover { opacity: .85; color: var(--text); }
+.rail-item.on.live:hover { color: var(--accent); }
+.rail-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.rail-item.pending { animation: blink .5s steps(2) infinite; }
+@keyframes blink { 50% { opacity: .25 } }
+
+.main {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; justify-content: center;
+}
+
+/* Reading ────────────────────────────────────────────────── */
+.read {
+  padding: 13px 14px 5px;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 14px;
+}
+/* Value + unit stay tight together. Previously .value took flex:1, which shoved
+   the unit to the far right edge and opened a dead gap mid-panel. */
+.read-main { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.sign {
+  font-family: var(--mono); font-size: 34px; font-weight: 500;
+  line-height: 1; color: var(--muted-hi);
+  width: 18px; flex: none; text-align: right; opacity: 0;
+}
+.sign.on { opacity: 1; }
+.value {
+  font-family: var(--mono); font-size: 52px; font-weight: 600;
+  line-height: .92; letter-spacing: -.035em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text); flex: none;
+  transition: color .2s;
+}
+.value.ol { color: var(--danger); letter-spacing: .02em; }
+.value.stale { color: var(--muted); }
+.unit {
+  font-family: var(--mono); font-size: 21px; font-weight: 400;
+  line-height: 1; color: var(--accent); flex: none; white-space: nowrap;
+}
+
+.meta {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 14px 10px 40px;
+  font-size: 10px; font-weight: 600; letter-spacing: .11em;
+  text-transform: uppercase; color: var(--muted); min-height: 15px;
+}
+.meta b { color: var(--accent); font-weight: 700; }
+.meta .sep { color: var(--rule-hi); font-weight: 400; letter-spacing: 0; }
+
+/* Controls ───────────────────────────────────────────────── */
+.controls { border-top: 1px solid var(--rule); background: rgba(0,0,0,.12); }
+.ctl-row { display: flex; align-items: flex-start; gap: 6px; padding: 7px 10px; }
+.ctl-row .ctl-label { padding-top: 5px; }
+.ctl-row + .ctl-row { border-top: 1px solid color-mix(in srgb, var(--rule) 60%, transparent); }
+.ctl-label {
+  font-size: 9px; font-weight: 700; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--muted);
+  flex: none; width: 36px;
+}
+/* Wraps rather than scrolls: a horizontally scrolling row silently clipped
+   AUTO+ off the right edge with no affordance that anything was hidden. */
+/* Sized so the widest set (8 current ranges) clears one row; wrap is kept only
+   as a safety net for unusually narrow windows. */
+.ctl-scroll {
+  display: flex; gap: 3px; flex: 1; flex-wrap: wrap; row-gap: 3px;
+  min-width: 0;
+}
+.ctl-none { font-size: 10px; color: var(--rule-hi); }
+
+.btn {
+  appearance: none; flex: none;
+  border: 1px solid var(--rule);
+  background: var(--panel-2);
+  color: var(--muted-hi);
+  border-radius: 4px; height: 21px; padding: 0 5px;
+  font-family: var(--ui); font-size: 9.5px; font-weight: 600;
+  letter-spacing: .02em; white-space: nowrap; cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.btn:hover:not(:disabled) { color: var(--text); border-color: var(--rule-hi); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.btn.on {
+  color: var(--ink); background: var(--accent);
+  border-color: var(--accent); font-weight: 700;
+}
+.btn.pending { animation: blink .5s steps(2) infinite; }
+.btn:disabled { opacity: .3; cursor: default; }
+.btn.wide { letter-spacing: .08em; text-transform: uppercase; padding: 0 8px; }
+
+/* Trace ──────────────────────────────────────────────────── */
+.trace {
+  height: 38px; border-top: 1px solid var(--rule);
+  background: rgba(0,0,0,.16); position: relative;
+  transition: opacity .2s;
+}
+.trace.paused { opacity: .45; }
+.trace.paused::after {
+  content: "HOLD"; position: absolute; right: 8px; top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--ui); font-size: 9px; font-weight: 700;
+  letter-spacing: .14em; color: var(--muted);
+}
+.trace canvas { display: block; width: 100%; height: 100%; }
+
+/* Secondary readings — sit directly under the main value, sharing its left
+   edge, so the sub-measurements read as part of the same instrument face. */
+.subs {
+  display: flex; flex-direction: column; align-items: flex-end;
+  gap: 1px; flex: none; padding: 0;
+}
+.subs.hidden { display: none; }
+.sub {
+  font-family: var(--mono); font-size: 13.5px;
+  font-variant-numeric: tabular-nums; color: var(--muted-hi);
+  display: flex; align-items: baseline; gap: 4px; white-space: nowrap;
+}
+.sub.empty { display: none; }
+.sub .u { font-size: 10px; color: var(--muted); }
+.sub .lbl {
+  font-family: var(--ui); font-size: 9px; font-weight: 700;
+  letter-spacing: .1em; color: var(--accent);
+}
+
+/* Status ─────────────────────────────────────────────────── */
+.status {
+  padding: 8px 12px; border-top: 1px solid var(--rule);
+  font-size: 11px; line-height: 1.45; color: var(--muted);
+  background: rgba(0,0,0,.16);
+}
+.status.err { color: var(--danger); }
+.status a { color: var(--muted-hi); text-underline-offset: 2px; cursor: pointer; text-decoration: underline; }
+.status a:hover { color: var(--text); }
+
+/* Settings sheet ─────────────────────────────────────────── */
+.sheet {
+  position: absolute; inset: 34px 0 0 0;
+  background: color-mix(in srgb, var(--panel) 97%, transparent);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  display: none; flex-direction: column; z-index: 5;
+}
+.sheet.open { display: flex; }
+.sheet-body { overflow-y: auto; padding: 4px 0 10px; }
+
+.set-row { padding: 9px 12px; border-bottom: 1px solid color-mix(in srgb, var(--rule) 70%, transparent); }
+.set-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 7px; }
+.set-title {
+  font-size: 10px; font-weight: 700; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--text);
+}
+.set-note { font-size: 10px; color: var(--muted); line-height: 1.5; }
+.set-note code {
+  font-family: var(--mono); font-size: 10px;
+  color: var(--muted-hi); background: var(--panel-2);
+  padding: 1px 4px; border-radius: 3px;
+}
+.set-note em { color: var(--accent); font-style: normal; font-weight: 700; }
+.set-opts { display: flex; gap: 4px; flex-wrap: wrap; }
+.rate-actual {
+  margin-left: auto; font-family: var(--mono); font-size: 10px;
+  color: var(--accent); font-variant-numeric: tabular-nums;
+}
+
+.log {
+  font-family: var(--mono); font-size: 9.5px; line-height: 1.6;
+  color: var(--muted-hi); background: #090c11;
+  border: 1px solid var(--rule); border-radius: 5px;
+  padding: 6px 8px; max-height: 160px; overflow-y: auto;
+  white-space: pre; margin-top: 7px;
+}
+.log .tx { color: var(--muted); }
+.log .rx { color: var(--live); }
+.log .hl { color: var(--accent); font-weight: 700; }
+.log .note { color: var(--rule-hi); }
+.log .bad { color: var(--danger); }
+.log-empty { color: var(--rule-hi); }
+
+/* Compact / overlay mode */
+.app.min .trace,
+.app.min .status,
+.app.min .controls { display: none; }
+.app.min .read { padding: 12px 14px 8px; min-height: 0; }
+.app.min .meta { padding-bottom: 10px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="app" id="app" data-state="idle">
+
+  <div class="bar">
+    <span class="dot"></span>
+    <span class="name" id="name">No meter</span>
+    <span class="bar-gap"></span>
+    <span class="chips">
+      <span class="chip" id="chip-rel">REL</span>
+      <span class="chip" id="chip-hold">HOLD</span>
+      <span class="chip" id="chip-lock">LOCK</span>
+    </span>
+    <span class="batt" id="batt">
+      <span class="batt-bolt">⚡</span>
+      <span class="batt-pips" id="batt-pips"></span>
+    </span>
+    <button class="iconbtn" id="set-btn" title="Settings">⚙</button>
+    <button class="iconbtn" id="min-btn" title="Overlay mode — reading only, transparent background">▤</button>
+    <button class="iconbtn" id="conn-btn">Connect</button>
+  </div>
+
+  <div class="body">
+    <div class="rail" id="rail"></div>
+    <div class="main">
+      <div class="read">
+        <div class="read-main">
+          <span class="sign" id="sign">−</span>
+          <span class="value" id="value" aria-live="polite">——</span>
+          <span class="unit" id="unit"></span>
+        </div>
+        <div class="subs hidden" id="subs">
+          <span class="sub empty" id="sec1">—</span>
+          <span class="sub empty" id="sec2">—</span>
+        </div>
+      </div>
+      <div class="meta" id="meta"></div>
+    </div>
+  </div>
+
+  <div class="controls" id="controls">
+    <div class="ctl-row">
+      <span class="ctl-label">Range</span>
+      <div class="ctl-scroll" id="ranges"></div>
+    </div>
+    <div class="ctl-row">
+      <span class="ctl-label">Mode</span>
+      <div class="ctl-scroll" id="modes"></div>
+      <button class="btn wide" id="btn-hold" disabled>Hold</button>
+      <button class="btn wide" id="btn-rel" disabled>Rel</button>
+    </div>
+  </div>
+
+  <div class="trace" id="tracebox"><canvas id="trace"></canvas></div>
+
+  <div class="status" id="status">Loading…</div>
+
+  <!-- Settings ─────────────────────────────────────────── -->
+  <div class="sheet" id="sheet">
+    <div class="sheet-body">
+
+      <div class="set-row">
+        <div class="set-head">
+          <span class="set-title">Refresh rate</span>
+          <span class="rate-actual" id="rate-actual">—</span>
+        </div>
+        <div class="set-opts" id="rate-opts"></div>
+        <div class="set-note" style="margin-top:7px">
+          The meter answers one request at a time, so the real ceiling is the
+          Bluetooth round trip — usually 15–30&nbsp;Hz. Asking for more than the
+          link can carry just wastes requests; the figure above is what you are
+          actually getting.
+        </div>
+      </div>
+
+      <div class="set-row">
+        <div class="set-head"><span class="set-title">History</span></div>
+        <div class="set-opts" id="win-opts"></div>
+        <div class="set-note" style="margin-top:7px">
+          The trace clears itself when the function, mode, or unit changes, since
+          the vertical scale is no longer comparable.
+        </div>
+      </div>
+
+      <div class="set-row">
+        <div class="set-head">
+          <span class="set-title">Packet inspector</span>
+          <button class="btn" id="log-toggle" style="margin-left:auto">Off</button>
+        </div>
+        <div class="set-note">
+          Raw frames on the wire. In a measurement reply the
+          <em>highlighted</em> byte is the status byte — bits 0–2 carry the
+          battery level, 0 to 5.
+        </div>
+        <div class="log" id="log"><span class="log-empty">Turn the inspector on to capture frames.</span></div>
+      </div>
+
+      <div class="set-row" style="border-bottom:0">
+        <div class="set-head"><span class="set-title">About</span></div>
+        <div class="set-note">
+          Client for the ALIENTEK DM40 (A/B/C) over BLE GATT service
+          <code>fff0</code>. Auto-ranging is set through the range list rather
+          than the meter's <code>0x03</code> command, which is a blind toggle the
+          device never reports back.
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ═══════════════════════════════════════════════════════════════
+   ALIENTEK DM40 — BLE client
+   Protocol per DM40-BLE-Protocol.md rev 1.1
+   ═══════════════════════════════════════════════════════════════ */
+
+const SERVICE = 0xfff0, CHAR_NOTIFY = 0xfff1, CHAR_WRITE = 0xfff3;
+
+const FLAG_TX = 0xaf, FLAG_RX = 0xdf;
+const DEV_DM40 = 0x0305, DEV_ANY = 0xffff;
+
+const FN_REGISTER = 0x00, FN_NAME_GET = 0x08, FN_READ = 0x09;
+const FN_HOLD = 0x04, FN_REL = 0x05, FN_GEAR = 0x06;
+
+const CMD_TIMEOUT = 3000;   // §3.3
+const STALE_MS = 500;       // §3.2
+const DEAD_MS = 4000;       // give up if nothing valid arrives for this long
+
+/* ── Frame codec (§2) ─────────────────────────────────────── */
+
+function checksum(bytes) {
+  let sum = 0;
+  for (const b of bytes) sum = (sum + b) & 0xffff;
+  return (256 - (sum % 256)) & 0xff;
+}
+
+function buildFrame(dev, fn, data = []) {
+  const f = new Uint8Array(6 + data.length);
+  f[0] = FLAG_TX;
+  f[1] = dev & 0xff;
+  f[2] = (dev >> 8) & 0xff;
+  f[3] = fn;
+  f[4] = data.length;
+  f.set(data, 5);
+  f[5 + data.length] = checksum(f.subarray(0, 5 + data.length));
+  return f;
+}
+
+const hex = (a) => [...a].map((b) => b.toString(16).padStart(2, "0")).join(" ");
+
+/** Byte-stream frame extractor (§3.2). */
+class FrameParser {
+  constructor(onFrame, onReject) {
+    this.onFrame = onFrame;
+    this.onReject = onReject;
+    this.buf = [];
+    this.touched = 0;
+  }
+  push(bytes) {
+    const now = performance.now();
+    if (this.buf.length && now - this.touched > STALE_MS) this.buf.length = 0;
+    this.touched = now;
+    for (const b of bytes) this.buf.push(b);
+    this.drain();
+  }
+  drain() {
+    for (;;) {
+      const start = this.buf.indexOf(FLAG_RX);
+      if (start < 0) { this.buf.length = 0; return; }
+      if (start > 0) this.buf.splice(0, start);
+      if (this.buf.length < 6) return;
+
+      const total = this.buf[4] + 6;
+      if (this.buf.length < total) return;
+
+      const frame = this.buf.slice(0, total);
+      if ((frame.reduce((a, b) => a + b, 0) & 0xff) === 0) {
+        this.buf.splice(0, total);
+        this.onFrame({
+          dev: frame[1] | (frame[2] << 8),
+          fn: frame[3],
+          data: Uint8Array.from(frame.slice(5, 5 + frame[4])),
+          raw: Uint8Array.from(frame),
+        });
+      } else {
+        this.onReject && this.onReject(Uint8Array.from(frame));
+        this.buf.splice(0, 1);
+      }
+    }
+  }
+  reset() { this.buf.length = 0; }
+}
+
+/* ── Transaction layer (§3.3, §4.4) ───────────────────────── */
+
+class Link {
+  constructor(write) {
+    this.write = write;
+    this.chain = Promise.resolve();
+    this.pending = null;
+    this.onTx = null; this.onRx = null; this.onBad = null;
+    this.parser = new FrameParser(
+      (f) => { this.onRx && this.onRx(f); this.receive(f); },
+      (raw) => { this.onBad && this.onBad(raw); }
+    );
+  }
+  ingest(bytes) { this.parser.push(bytes); }
+  receive(frame) {
+    const p = this.pending;
+    if (p && frame.fn === p.fn) { this.pending = null; p.resolve(frame); }
+  }
+  send(dev, fn, data = [], timeout = CMD_TIMEOUT) {
+    const task = () => this.exchange(dev, fn, data, timeout);
+    const result = this.chain.then(task, task);
+    this.chain = result.catch(() => {});
+    return result;
+  }
+  exchange(dev, fn, data, timeout) {
+    return new Promise((resolve, reject) => {
+      let timer = 0;
+      this.pending = { fn, resolve: (f) => { clearTimeout(timer); resolve(f); } };
+      timer = setTimeout(() => { this.pending = null; reject(new Error("timeout")); }, timeout);
+      const frame = buildFrame(dev, fn, data);
+      this.onTx && this.onTx(frame);
+      this.write(frame).catch((e) => {
+        clearTimeout(timer); this.pending = null; reject(e);
+      });
+    });
+  }
+  abort() { this.pending = null; this.parser.reset(); }
+}
+
+/* ── Measurement decode (§6) ──────────────────────────────── */
+
+const RAIL = [
+  { g: "V", t: "Voltage" }, { g: "A", t: "Current" }, { g: "Ω", t: "Resistance" },
+  { g: "F", t: "Capacitance" }, { g: "⊳", t: "Diode / continuity" },
+  { g: "∿", t: "Frequency / temperature" },
+];
+const ACCENTS = ["#f5a524", "#4cc9e0", "#b18af0", "#5b8def", "#4ade80", "#f472a0"];
+
+const UNITS = {
+  0: ["mV", "V"],
+  1: ["µA", "mA", "A"],
+  2: ["Ω", "kΩ", "MΩ"],
+  3: ["nF", "µF", "mF"],
+  5: [["Hz", "kHz", "MHz"], ["°C", "°F"]],
+};
+
+/** Main-display unit — the 4-digit `dm40unit{fn}{unit}` asset family. */
+function unitFor(fn, mode, idx) {
+  if (fn === 4) return mode === 1 ? "Ω" : "V";
+  if (fn === 5) return UNITS[5][mode === 1 ? 1 : 0][idx] || "*";
+  return (UNITS[fn] && UNITS[fn][idx]) || "*";
+}
+
+const FREQ = ["Hz", "kHz", "MHz"];
+
+/**
+ * Secondary-slot unit — NOT the same table as the main display.
+ * The vendor app picks a 6-digit `dm40unit{fn}{mode}{unit}` asset here, and the
+ * mapping is genuinely different: on AC volts the meter puts frequency in slot 1
+ * and duty cycle in slot 2, so reusing the main table mislabels 60 Hz as 60 mV.
+ * Transcribed from get_SecValueUnitStr1 / get_SecValueUnitStr2.
+ */
+/**
+ * In AC+DC coupling both secondary slots carry the main unit, so the unit alone
+ * cannot say which component is which. Confirmed against hardware: slot 1 is the
+ * AC component, slot 2 is the DC component.
+ */
+function secLabelFor(slot, fn, mode) {
+  if (fn !== 0 && fn !== 1) return "";
+  if (mode !== 2) return "";
+  if (slot === 1) return "AC";
+  if (slot === 2) return "DC";
+  return "";               // main display is never labelled
+}
+
+function secUnitFor(slot, fn, mode, idx) {
+  if (slot === 1) {
+    // AC volts / AC current -> slot 1 carries frequency
+    if ((fn === 0 || fn === 1) && mode === 1) return FREQ[idx] || "Hz";
+    // Temperature -> slot 1 is °C (the app hardcodes this asset)
+    if (fn === 5 && mode === 1) return "°C";
+    // Remaining mode-1 cases resolve to a 6-digit asset; only diode/continuity
+    // ships one, and it is the buzzer symbol rather than a unit.
+    if (mode === 1) return "";
+    // Everything else — notably AC+DC (mode 2), where slots 1 and 2 carry the
+    // AC and DC components — falls through to the 4-digit main unit table.
+    return unitFor(fn, mode, idx);
+  }
+  // Slot 2
+  if (fn === 1 && mode === 0) return "%";                 // DC current
+  if ((fn === 0 || fn === 1) && mode === 1) return "%";   // AC volts / current
+  if (fn === 4) return mode === 0 ? "Ω" : "";
+  if (fn === 5) return mode === 1 ? "°F" : "%";           // temp -> °F, freq -> %
+  return unitFor(fn, mode, idx);                          // incl. AC+DC components
+}
+
+/** Range labels, [rangeIndex][modelIndex]. §6.7 */
+const RANGES = {
+  0: [["400 mV","500 mV","600 mV"],["4 V","5 V","6 V"],["40 V","50 V","60 V"],
+      ["400 V","500 V","600 V"],["1000 V","1000 V","1000 V"],["AUTO","AUTO","AUTO"],
+      ["AUTO+","AUTO+","AUTO+"]],
+  1: [["400 µA","500 µA","600 µA"],["4000 µA","5000 µA","6000 µA"],["40 mA","50 mA","60 mA"],
+      ["400 mA","500 mA","600 mA"],["4 A","5 A","6 A"],["10 A","10 A","10 A"],
+      ["AUTO","AUTO","AUTO"],["AUTO+","AUTO+","AUTO+"]],
+  2: [["400 Ω","500 Ω","600 Ω"],["4 kΩ","5 kΩ","6 kΩ"],["40 kΩ","50 kΩ","60 kΩ"],
+      ["400 kΩ","500 kΩ","600 kΩ"],["4 MΩ","5 MΩ","6 MΩ"],["40 MΩ","50 MΩ","60 MΩ"],
+      ["AUTO","AUTO","AUTO"]],
+};
+
+function rangeLabel(fn, range, modelIdx) {
+  const t = RANGES[fn];
+  if (!t) return "AUTO";
+  return (t[range] && t[range][modelIdx]) || "—";
+}
+function rangeOptions(fn, modelIdx) {
+  const t = RANGES[fn];
+  if (!t) return [];
+  return t.map((row, i) => ({ i, label: row[modelIdx] || "—" }));
+}
+
+function modeOptions(fn, model) {
+  if (fn === 0 || fn === 1) {
+    const m = [{ i: 0, label: "DC" }, { i: 1, label: "AC" }];
+    if (model !== "A") m.push({ i: 2, label: "AC+DC" });   // §6.2 — DM40A refuses
+    return m;
+  }
+  if (fn === 4) return [{ i: 0, label: "Diode" }, { i: 1, label: "Continuity" }];
+  if (fn === 5) return [{ i: 0, label: "Frequency" }, { i: 1, label: "Temperature" }];
+  return [];
+}
+function modeLabel(fn, mode) {
+  if (fn === 0 || fn === 1) return ["DC", "AC", "AC+DC"][mode] || "";
+  if (fn === 4) return mode === 1 ? "CONT" : "DIODE";
+  if (fn === 5) return mode === 1 ? "TEMP" : "FREQ";
+  return "";
+}
+
+function decodeReading(raw, info, fn, mode, slot) {
+  // A descriptor byte of 0 means the slot carries no reading at all — the
+  // vendor app blanks both the value and the unit in that case, and never
+  // renders overload for it. 0xFF is the app's pre-connection initial value
+  // and is treated the same way. Getting this wrong shows a phantom "OL mV"
+  // on the two secondary slots whenever they are unused.
+  if (info === 0 || info === 0xff) {
+    return { ol: false, blank: true, unit: "", text: null, value: null };
+  }
+  const idx = (info >> 4) & 0x03;
+  const unit = slot ? secUnitFor(slot, fn, mode, idx) : unitFor(fn, mode, idx);
+  const label = slot ? secLabelFor(slot, fn, mode) : "";
+  if (raw === 0xffff) {
+    return { ol: true, unit, label, text: null, value: null };
+  }
+  const power = (info >> 1) & 0x07;
+  const neg = (info & 0x01) === 1;
+  // Defect A in the spec (fn 4 / mode 1 / descriptor mode 2 adds 0xFFF0 in int
+  // arithmetic) produces nonsense values, so it is deliberately not reproduced.
+  const value = (raw / Math.pow(10, power)) * (neg ? -1 : 1);
+  return { ol: false, unit, label, value, text: Math.abs(value).toFixed(power), neg };
+}
+
+/** Decode the 11-byte GetRealTimeData payload (§6.1). */
+function decodePacket(data, modelIdx) {
+  if (data.length < 11) return null;
+  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const gear = data[0], status = data[1];
+  const fn = gear & 0x07, range = (gear >> 3) & 0x07, mode = (gear >> 6) & 0x03;
+  return {
+    fn, range, mode, gear, status,
+    rangeLabel: rangeLabel(fn, range, modelIdx),
+    modeLabel: modeLabel(fn, mode),
+    battery: status & 0x07,
+    charging: !!(status & 0x08),
+    rel: !!(status & 0x20),
+    lock: !!(status & 0x40),
+    hold: !!(status & 0x80),
+    main: decodeReading(dv.getUint16(9, true), data[4], fn, mode, 0),
+    sec1: decodeReading(dv.getUint16(5, true), data[2], fn, mode, 1),
+    sec2: decodeReading(dv.getUint16(7, true), data[3], fn, mode, 2),
+  };
+}
+
+/** Pack function/range/mode into the SetGear byte (§7). */
+const packGear = (fn, range, mode) =>
+  (fn & 0x07) | ((range & 0x07) << 3) | ((mode & 0x03) << 6);
+
+/**
+ * Per-function defaults when switching function (§7.3). Pressing the function
+ * you are already on cycles that function's sub-mode, matching the meter.
+ */
+function gearForFunction(target, cur, model) {
+  const same = cur && cur.fn === target;
+  const cycle = (m) => {
+    const opts = modeOptions(target, model);
+    if (!opts.length) return 0;
+    const at = opts.findIndex((o) => o.i === m);
+    return opts[(at + 1) % opts.length].i;
+  };
+  switch (target) {
+    case 0: return same ? { range: cur.range, mode: cycle(cur.mode) } : { range: 6, mode: 0 };
+    case 1: return same ? { range: cur.range, mode: cycle(cur.mode) } : { range: 7, mode: 0 };
+    case 2: return same ? { range: cur.range, mode: cur.mode ? 0 : 1 } : { range: 6, mode: 0 };
+    case 3: return { range: 0, mode: 0 };
+    default: return same ? { range: 0, mode: cycle(cur.mode) } : { range: 0, mode: 0 };
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   UI
+   ═══════════════════════════════════════════════════════════════ */
+
+const $ = (id) => document.getElementById(id);
+const app = $("app");
+const els = {
+  name: $("name"), value: $("value"), unit: $("unit"), sign: $("sign"),
+  meta: $("meta"), rail: $("rail"), status: $("status"),
+  sec1: $("sec1"), sec2: $("sec2"), subs: $("subs"),
+  batt: $("batt"), pips: $("batt-pips"),
+  rel: $("chip-rel"), hold: $("chip-hold"), lock: $("chip-lock"),
+  conn: $("conn-btn"), min: $("min-btn"), set: $("set-btn"),
+  sheet: $("sheet"), canvas: $("trace"), tracebox: $("tracebox"),
+  ranges: $("ranges"), modes: $("modes"),
+  btnHold: $("btn-hold"), btnRel: $("btn-rel"),
+  rateOpts: $("rate-opts"), rateActual: $("rate-actual"),
+  winOpts: $("win-opts"), log: $("log"), logToggle: $("log-toggle"),
+};
+
+const cfg = { pollMs: 200, window: 240, logging: false };
+let session = null;
+let demo = null;
+let last = null;      // last decoded packet
+let pending = null;   // { kind, value, at } — command awaiting confirmation
+
+/* Battery pips */
+const pips = [];
+for (let i = 0; i < 5; i++) {
+  const p = document.createElement("span");
+  p.className = "pip";
+  els.pips.appendChild(p);
+  pips.push(p);
+}
+
+/* Function rail — becomes buttons once connected */
+const railItems = RAIL.map((r, i) => {
+  const b = document.createElement("button");
+  b.className = "rail-item";
+  b.textContent = r.g;
+  b.title = r.t;
+  b.type = "button";
+  b.addEventListener("click", () => onFunctionPress(i));
+  els.rail.appendChild(b);
+  return b;
+});
+
+function setState(s) {
+  app.dataset.state = s;
+  const live = s === "live" && !!session;
+  railItems.forEach((b) => b.classList.toggle("live", live));
+}
+
+function setStatus(html, isError) {
+  els.status.innerHTML = html;
+  els.status.classList.toggle("err", !!isError);
+  els.status.querySelectorAll("[data-demo]").forEach((a) =>
+    a.addEventListener("click", toggleDemo));
+}
+
+/* ── Render ───────────────────────────────────────────────── */
+
+let scaleKey = null;   // fn|mode|unit — the trace resets when this changes
+
+function render(p) {
+  document.documentElement.style.setProperty("--accent", ACCENTS[p.fn] || ACCENTS[0]);
+  railItems.forEach((el, i) => el.classList.toggle("on", i === p.fn));
+
+  const key = p.fn + "|" + p.mode + "|" + p.main.unit;
+  if (key !== scaleKey) { scaleKey = key; trace.clear(); }
+
+  const hasSubs = (p.sec1.ol || p.sec1.text !== null) ||
+                  (p.sec2.ol || p.sec2.text !== null);
+
+  els.value.classList.remove("stale");
+  if (p.main.ol) {
+    setValueText("OL", hasSubs);
+    els.value.classList.add("ol");
+    els.sign.classList.remove("on");
+  } else if (p.main.text === null) {
+    setValueText("——", hasSubs);
+    els.value.classList.remove("ol");
+    els.sign.classList.remove("on");
+  } else {
+    setValueText(p.main.text, hasSubs);
+    els.value.classList.remove("ol");
+    els.sign.classList.toggle("on", !!p.main.neg);
+  }
+  els.unit.textContent = p.main.unit;
+
+  const bits = [];
+  if (p.modeLabel) bits.push("<b>" + p.modeLabel + "</b>");
+  bits.push(p.rangeLabel);
+  els.meta.innerHTML = bits.join('<span class="sep"> / </span>');
+
+  renderSec(els.sec1, p.sec1);
+  renderSec(els.sec2, p.sec2);
+  els.subs.classList.toggle("hidden",
+    els.sec1.classList.contains("empty") && els.sec2.classList.contains("empty"));
+
+  els.rel.classList.toggle("on", p.rel);
+  els.hold.classList.toggle("on", p.hold);
+  els.lock.classList.toggle("on", p.lock);
+
+  els.batt.classList.add("show");
+  els.batt.classList.toggle("low", p.battery <= 1 && !p.charging);
+  els.batt.classList.toggle("chg", p.charging);
+  pips.forEach((el, i) => el.classList.toggle("on", i < p.battery));
+
+  const rebuild = !last || last.fn !== p.fn;
+  last = p;
+  if (rebuild) buildControls(p);
+  syncControls(p);
+
+  // HOLD freezes the meter's reading, so keep the pre-hold history intact rather
+  // than flat-lining the trace with repeats of the held value.
+  els.tracebox.classList.toggle("paused", p.hold);
+  if (!p.hold) trace.push(p.main.ol ? null : p.main.value);
+}
+
+/**
+ * The descriptor's power field allows up to 7 decimal places, so a reading can
+ * be far longer than the usual 6 characters. Step the type down rather than let
+ * a long value collide with the secondary column.
+ */
+function setValueText(t, hasSubs) {
+  els.value.textContent = t;
+  const n = t.length;
+  // Base ladder is sized for the widest case: a long reading sitting next to the
+  // AC/DC secondary column. With no secondaries there is room for more.
+  let f = n > 8 ? 34 : n > 7 ? 39 : n > 6 ? 45 : n > 5 ? 52 : n > 4 ? 60 : 66;
+  if (!hasSubs) f = Math.min(f + 8, 74);
+  els.value.style.fontSize = f + "px";
+  els.sign.style.fontSize = Math.round(f * 0.62) + "px";
+  els.unit.style.fontSize = Math.round(f * 0.40) + "px";
+}
+
+function renderSec(el, r) {
+  const lbl = r.label ? '<span class="lbl">' + r.label + "</span> " : "";
+  if (r.ol) {
+    el.classList.remove("empty");
+    el.innerHTML = lbl + 'OL <span class="u">' + r.unit + "</span>";
+  } else if (r.text === null) {
+    el.classList.add("empty");
+    el.textContent = "—";
+  } else {
+    el.classList.remove("empty");
+    el.innerHTML = lbl + (r.neg ? "−" : "") + r.text +
+                   ' <span class="u">' + r.unit + "</span>";
+  }
+}
+
+function clearReadout() {
+  setValueText("——", false);
+  els.value.classList.remove("ol");
+  els.value.classList.add("stale");
+  els.unit.textContent = "";
+  els.sign.classList.remove("on");
+  els.meta.textContent = "";
+  railItems.forEach((el) => { el.classList.remove("on"); el.classList.remove("pending"); });
+  [els.rel, els.hold, els.lock].forEach((c) => c.classList.remove("on"));
+  els.batt.classList.remove("show");
+  els.sec1.className = "sub empty"; els.sec1.textContent = "—";
+  els.sec2.className = "sub empty"; els.sec2.textContent = "—";
+  els.subs.classList.add("hidden");
+  els.ranges.innerHTML = ""; els.modes.innerHTML = "";
+  els.btnHold.disabled = true; els.btnRel.disabled = true;
+  els.btnHold.classList.remove("on"); els.btnRel.classList.remove("on");
+  last = null; scaleKey = null; pending = null;
+  els.tracebox.classList.remove("paused");
+  trace.clear();
+}
+
+/* ── Controls ─────────────────────────────────────────────── */
+
+function buildControls(p) {
+  const live = !!session;
+  const model = session ? session.model : "C";
+  const modelIdx = session ? session.modelIdx : 2;
+
+  els.ranges.innerHTML = "";
+  const opts = rangeOptions(p.fn, modelIdx);
+  if (!opts.length) {
+    const s = document.createElement("span");
+    s.className = "ctl-none";
+    s.textContent = "Auto only";
+    els.ranges.appendChild(s);
+  } else {
+    opts.forEach((o) => {
+      const b = document.createElement("button");
+      b.className = "btn";
+      b.type = "button";
+      b.textContent = o.label.replace(/\s+/g, "");   // chips are tight; meta keeps the spaced form
+      b.title = o.label;
+      b.dataset.range = String(o.i);
+      b.disabled = !live;
+      b.addEventListener("click", () => setRange(o.i));
+      els.ranges.appendChild(b);
+    });
+  }
+
+  els.modes.innerHTML = "";
+  const mopts = modeOptions(p.fn, model);
+  if (!mopts.length) {
+    const s = document.createElement("span");
+    s.className = "ctl-none";
+    s.textContent = "—";
+    els.modes.appendChild(s);
+  } else {
+    mopts.forEach((o) => {
+      const b = document.createElement("button");
+      b.className = "btn";
+      b.type = "button";
+      b.textContent = o.label;
+      b.dataset.mode = String(o.i);
+      b.disabled = !live;
+      b.addEventListener("click", () => setMode(o.i));
+      els.modes.appendChild(b);
+    });
+  }
+
+  els.btnHold.disabled = !live;
+  els.btnRel.disabled = !live;
+}
+
+function syncControls(p) {
+  els.ranges.querySelectorAll("[data-range]").forEach((b) =>
+    b.classList.toggle("on", Number(b.dataset.range) === p.range));
+  els.modes.querySelectorAll("[data-mode]").forEach((b) =>
+    b.classList.toggle("on", Number(b.dataset.mode) === p.mode));
+  els.btnHold.classList.toggle("on", p.hold);
+  els.btnRel.classList.toggle("on", p.rel);
+
+  if (pending) {
+    const done =
+      (pending.kind === "gear" && p.gear === pending.value) ||
+      (pending.kind === "hold" && p.hold === !!pending.value) ||
+      (pending.kind === "rel" && p.rel === !!pending.value) ||
+      performance.now() - pending.at > 2000;
+    if (done) clearPending();
+  }
+}
+
+function clearPending() {
+  pending = null;
+  document.querySelectorAll(".pending").forEach((e) => e.classList.remove("pending"));
+}
+
+function markPending(el, kind, value) {
+  clearPending();
+  pending = { kind: kind, value: value, at: performance.now() };
+  if (el) el.classList.add("pending");
+}
+
+async function sendGear(fn, range, mode, el) {
+  if (!session || !last) return;
+  const byte = packGear(fn, range, mode);
+  markPending(el, "gear", byte);
+  try {
+    await session.link.send(DEV_DM40, FN_GEAR, [byte]);
+  } catch (e) {
+    clearPending();
+    setStatus("The meter did not accept that change. Try again.", true);
+  }
+}
+
+function onFunctionPress(fn) {
+  if (!session || !last) return;
+  const g = gearForFunction(fn, last, session.model);
+  sendGear(fn, g.range, g.mode, railItems[fn]);
+}
+
+function setRange(i) {
+  if (!last) return;
+  sendGear(last.fn, i, last.mode, els.ranges.querySelector('[data-range="' + i + '"]'));
+}
+
+function setMode(m) {
+  if (!last) return;
+  sendGear(last.fn, last.range, m, els.modes.querySelector('[data-mode="' + m + '"]'));
+}
+
+async function toggleFlag(fnCode, kind, el) {
+  if (!session || !last) return;
+  const next = kind === "hold" ? !last.hold : !last.rel;
+  markPending(el, kind, next ? 1 : 0);
+  try {
+    await session.link.send(DEV_DM40, fnCode, [next ? 1 : 0]);
+  } catch (e) {
+    clearPending();
+  }
+}
+
+els.btnHold.addEventListener("click", () => toggleFlag(FN_HOLD, "hold", els.btnHold));
+els.btnRel.addEventListener("click", () => toggleFlag(FN_REL, "rel", els.btnRel));
+
+/* ── Trace ────────────────────────────────────────────────── */
+
+const trace = (function () {
+  const cv = els.canvas;
+  const ctx = cv.getContext("2d");
+  let pts = [];
+
+  function resize() {
+    const r = cv.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(r.width * dpr);
+    cv.height = Math.round(r.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    draw();
+  }
+
+  function draw() {
+    const r = cv.getBoundingClientRect();
+    const w = r.width, h = r.height;
+    if (!w || !h) return;
+    ctx.clearRect(0, 0, w, h);
+
+    const n = pts.length;
+    const real = pts.filter((v) => v !== null && Number.isFinite(v));
+    if (real.length < 2) return;
+
+    let lo = Math.min.apply(null, real), hi = Math.max.apply(null, real);
+    if (hi - lo < 1e-12) {
+      const nudge = Math.abs(hi) * 0.05 + 1e-6;
+      hi += nudge; lo -= nudge;
+    }
+    const pad = (hi - lo) * 0.18;
+    lo -= pad; hi += pad;
+
+    // Newest sample pinned to the right edge; the window fills leftwards.
+    const step = w / (cfg.window - 1);
+    const X = (i) => w - (n - 1 - i) * step;
+    const Y = (v) => h - ((v - lo) / (hi - lo)) * h;
+
+    // Split into contiguous non-null runs, each filled and stroked as its own
+    // closed path. A single path spanning gaps is what produced the stray
+    // diagonal shading in v1.
+    const runs = [];
+    let cur = [];
+    for (let i = 0; i < n; i++) {
+      const v = pts[i];
+      if (v === null || !Number.isFinite(v)) {
+        if (cur.length) runs.push(cur);
+        cur = [];
+      } else {
+        cur.push([X(i), Y(v)]);
+      }
+    }
+    if (cur.length) runs.push(cur);
+
+    const accent = getComputedStyle(document.documentElement)
+      .getPropertyValue("--accent").trim() || "#f5a524";
+
+    runs.forEach((run) => {
+      if (run.length < 2) return;
+      ctx.beginPath();
+      ctx.moveTo(run[0][0], run[0][1]);
+      for (let i = 1; i < run.length; i++) ctx.lineTo(run[i][0], run[i][1]);
+      ctx.lineTo(run[run.length - 1][0], h);
+      ctx.lineTo(run[0][0], h);
+      ctx.closePath();
+      ctx.fillStyle = accent + "1c";
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.moveTo(run[0][0], run[0][1]);
+      for (let i = 1; i < run.length; i++) ctx.lineTo(run[i][0], run[i][1]);
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 1.25;
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      ctx.stroke();
+    });
+  }
+
+  window.addEventListener("resize", resize);
+  setTimeout(resize, 0);
+
+  return {
+    push(v) { pts.push(v); while (pts.length > cfg.window) pts.shift(); draw(); },
+    clear() { pts = []; draw(); },
+    trim() { while (pts.length > cfg.window) pts.shift(); draw(); },
+    resize: resize,
+  };
+})();
+
+/* ── Packet inspector ─────────────────────────────────────── */
+
+const logBuf = [];
+function logFrame(dir, bytes, note) {
+  if (!cfg.logging) return;
+  logBuf.push({ dir: dir, hex: hex(bytes), note: note || "" });
+  while (logBuf.length > 60) logBuf.shift();
+  if (els.sheet.classList.contains("open")) renderLog();
+}
+function renderLog() {
+  if (!logBuf.length) {
+    els.log.innerHTML = '<span class="log-empty">' +
+      (cfg.logging ? "Waiting for frames…" : "Turn the inspector on to capture frames.") +
+      "</span>";
+    return;
+  }
+  els.log.innerHTML = logBuf.slice(-40).map((e) => {
+    let h = e.hex;
+    if (e.dir === "rx" && h.indexOf("df 05 03 09") === 0) {
+      const parts = h.split(" ");
+      if (parts.length > 6) parts[6] = '<span class="hl">' + parts[6] + "</span>";
+      h = parts.join(" ");
+    }
+    const arrow = '<span class="' + e.dir + '">' + (e.dir === "tx" ? "»" : "«") + "</span>";
+    const note = e.note ? '  <span class="bad">' + e.note + "</span>" : "";
+    return arrow + " " + h + note;
+  }).join("\n");
+  els.log.scrollTop = els.log.scrollHeight;
+}
+
+/* ── Settings ─────────────────────────────────────────────── */
+
+const RATES = [
+  { ms: 500, label: "2 Hz" }, { ms: 200, label: "5 Hz" },
+  { ms: 100, label: "10 Hz" }, { ms: 50, label: "20 Hz" },
+  { ms: 20, label: "50 Hz" }, { ms: 0, label: "Max" },
+];
+const WINDOWS = [
+  { n: 120, label: "Short" }, { n: 240, label: "Medium" }, { n: 600, label: "Long" },
+];
+
+function buildSettings() {
+  els.rateOpts.innerHTML = "";
+  RATES.forEach((r) => {
+    const b = document.createElement("button");
+    b.className = "btn" + (r.ms === cfg.pollMs ? " on" : "");
+    b.type = "button";
+    b.textContent = r.label;
+    b.addEventListener("click", () => {
+      cfg.pollMs = r.ms;
+      save();
+      Array.prototype.forEach.call(els.rateOpts.children,
+        (c) => c.classList.toggle("on", c === b));
+    });
+    els.rateOpts.appendChild(b);
+  });
+
+  els.winOpts.innerHTML = "";
+  WINDOWS.forEach((wdw) => {
+    const b = document.createElement("button");
+    b.className = "btn" + (wdw.n === cfg.window ? " on" : "");
+    b.type = "button";
+    b.textContent = wdw.label;
+    b.addEventListener("click", () => {
+      cfg.window = wdw.n;
+      save();
+      trace.trim();
+      Array.prototype.forEach.call(els.winOpts.children,
+        (c) => c.classList.toggle("on", c === b));
+    });
+    els.winOpts.appendChild(b);
+  });
+
+  els.logToggle.textContent = cfg.logging ? "On" : "Off";
+  els.logToggle.classList.toggle("on", cfg.logging);
+}
+
+function save() {
+  try { localStorage.setItem("dm40", JSON.stringify(cfg)); } catch (e) {}
+}
+function load() {
+  try {
+    const v = JSON.parse(localStorage.getItem("dm40") || "{}");
+    if (RATES.some((r) => r.ms === v.pollMs)) cfg.pollMs = v.pollMs;
+    if (WINDOWS.some((w) => w.n === v.window)) cfg.window = v.window;
+    cfg.logging = !!v.logging;
+  } catch (e) {}
+}
+
+els.logToggle.addEventListener("click", () => {
+  cfg.logging = !cfg.logging;
+  if (!cfg.logging) logBuf.length = 0;
+  save();
+  buildSettings();
+  renderLog();
+});
+
+els.set.addEventListener("click", () => {
+  const open = els.sheet.classList.toggle("open");
+  els.set.classList.toggle("active", open);
+  if (open) renderLog();
+});
+
+/* ── Rate meter ───────────────────────────────────────────── */
+let rateTicks = 0;
+setInterval(() => {
+  if (!session && !demo) { els.rateActual.textContent = "—"; rateTicks = 0; return; }
+  els.rateActual.textContent = rateTicks + " Hz actual";
+  rateTicks = 0;
+}, 1000);
+
+/* ── Session ──────────────────────────────────────────────── */
+
+const DEMO_LINK = ' <a data-demo>Preview with sample data</a>';
+
+const NO_BT =
+  "This browser has no Web Bluetooth, so it cannot reach the meter. Use Chrome, " +
+  "Edge, or Opera on desktop or Android — iOS Safari does not support it, and " +
+  "neither does Chrome on iOS. The page must also be served over HTTPS or from " +
+  "localhost. You can still lay out the overlay with sample data.";
+
+/** Status line for the idle state — always offers the demo, since on a browser
+ *  without Web Bluetooth it is the only thing the page can do. */
+const helpText = () =>
+  (navigator.bluetooth
+    ? "Connect an ALIENTEK DM40 over Bluetooth to start reading."
+    : NO_BT) + DEMO_LINK;
+
+async function connect() {
+  if (!navigator.bluetooth) { setState("error"); setStatus(NO_BT + DEMO_LINK, true); return; }
+
+  setState("connecting");
+  setStatus("Choose your meter in the browser prompt…");
+
+  let device;
+  try {
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: "DM40" }, { services: [SERVICE] }],
+      optionalServices: [SERVICE],
+    });
+  } catch (e) {
+    setState("idle");
+    if (e && e.name === "NotFoundError") {
+      setStatus("No meter picked. Turn Bluetooth on from the meter's Settings → " +
+                "Other Settings, then try again. <a data-demo>Preview with sample data</a>");
+    } else {
+      setStatus("Could not open the device picker: " + (e && e.message) + DEMO_LINK, true);
+    }
+    return;
+  }
+
+  try {
+    setStatus("Connecting to " + (device.name || "meter") + "…");
+    device.addEventListener("gattserverdisconnected", onDrop);
+
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE);
+    const notify = await service.getCharacteristic(CHAR_NOTIFY);
+    const write = await service.getCharacteristic(CHAR_WRITE);
+
+    const writeFn = write.properties.write
+      ? (b) => write.writeValueWithResponse(b)
+      : (b) => write.writeValueWithoutResponse(b);
+
+    const link = new Link(writeFn);
+    link.onTx = (f) => logFrame("tx", f);
+    link.onRx = (f) => logFrame("rx", f.raw);
+    link.onBad = (f) => logFrame("rx", f, "checksum failed");
+
+    notify.addEventListener("characteristicvaluechanged", (ev) => {
+      link.ingest(new Uint8Array(ev.target.value.buffer));
+    });
+    await notify.startNotifications();
+
+    session = {
+      device: device, server: server, link: link,
+      modelIdx: 0, model: "A", stop: false, lastGood: performance.now(),
+    };
+    await identify(session);
+
+    setState("live");
+    els.conn.textContent = "Disconnect";
+    els.name.textContent = "DM40" + session.model;
+    setStatus("Reading " + (device.name || "meter") + ".");
+    poll(session);
+  } catch (e) {
+    setState("error");
+    setStatus("Connection failed: " + (e && e.message) + DEMO_LINK, true);
+    try { device.gatt.disconnect(); } catch (_) {}
+    session = null;
+  }
+}
+
+/** §4.1 registration, with the GetBleName fallback. */
+async function identify(s) {
+  try {
+    const r = await s.link.send(DEV_ANY, FN_REGISTER, []);
+    if (r.data.length >= 3 && (r.data[0] | (r.data[1] << 8)) === DEV_DM40) {
+      const letter = String.fromCharCode(r.data[2]);
+      if ("ABC".indexOf(letter) >= 0) {
+        s.model = letter; s.modelIdx = "ABC".indexOf(letter); return;
+      }
+    }
+  } catch (e) {}
+  try {
+    const r = await s.link.send(DEV_DM40, FN_NAME_GET, []);
+    const name = new TextDecoder().decode(r.data).replace(/\0[\s\S]*$/, "");
+    const letter = name[4];
+    if (letter && "ABC".indexOf(letter) >= 0) {
+      s.model = letter; s.modelIdx = "ABC".indexOf(letter); return;
+    }
+  } catch (e) {}
+  s.model = "A"; s.modelIdx = 0;
+}
+
+async function poll(s) {
+  while (!s.stop && s.device.gatt.connected) {
+    try {
+      // Keep the timeout close to the interval, or fast rates pile up on a stall
+      const timeout = Math.max(400, Math.min(CMD_TIMEOUT, (cfg.pollMs || 100) * 6));
+      const r = await s.link.send(DEV_DM40, FN_READ, [], timeout);
+      const p = decodePacket(r.data, s.modelIdx);
+      if (p) { render(p); s.lastGood = performance.now(); rateTicks++; }
+    } catch (e) {
+      const dead = performance.now() - s.lastGood;
+      if (dead > 1500) els.value.classList.add("stale");
+      if (dead > DEAD_MS) {
+        setStatus("The meter stopped responding. Check it is still powered and in range." +
+                  DEMO_LINK, true);
+        setState("error");
+        disconnect();
+        return;
+      }
+    }
+    if (cfg.pollMs > 0) await new Promise((r) => setTimeout(r, cfg.pollMs));
+  }
+}
+
+function onDrop() {
+  if (!session) return;
+  setState("idle");
+  teardown();
+  setStatus("The meter disconnected. <a data-demo>Preview with sample data</a>");
+}
+
+function disconnect() {
+  if (!session) return;
+  session.stop = true;
+  try { session.device.gatt.disconnect(); } catch (e) {}
+  teardown();
+}
+
+function teardown() {
+  if (session) { session.stop = true; session.link.abort(); }
+  session = null;
+  els.conn.textContent = "Connect";
+  els.name.textContent = "No meter";
+  clearReadout();
+  if (app.dataset.state !== "error") setState("idle");
+}
+
+/* ── Demo mode ────────────────────────────────────────────── */
+
+function toggleDemo() {
+  if (demo) {
+    clearInterval(demo); demo = null;
+    teardown(); setStatus(helpText());
+    return;
+  }
+  if (session) disconnect();
+
+  setState("live");
+  els.name.textContent = "DM40C · sample";
+  els.conn.textContent = "Stop";
+  setStatus("Showing sample data — nothing is connected, so the controls are " +
+            "inactive. <a data-demo>Stop preview</a>");
+
+  let t = 0;
+  const tick = () => {
+    t += 0.2;
+    const volts = 4.231 + Math.sin(t / 3) * 0.35 + (Math.random() - 0.5) * 0.02;
+    const raw = Math.round(Math.abs(volts) * 1000);
+    const data = new Uint8Array(11);
+    data[0] = packGear(0, 6, 1);           // voltage, AUTO+, AC
+    data[1] = 4 | 0x08;                    // 4 bars, charging
+    data[4] = 0 | (3 << 1) | (1 << 4);     // +, 3 dp, unit "V"
+    data[2] = 0 | (1 << 1) | (0 << 4);     // slot 1: 1 dp, Hz
+    data[3] = 0 | (1 << 1) | (0 << 4);     // slot 2: 1 dp, %
+    const dvw = new DataView(data.buffer);
+    dvw.setUint16(9, raw, true);
+    dvw.setUint16(5, 600, true);           // 60.0 Hz
+    dvw.setUint16(7, 499, true);           // 49.9 %
+    const p = decodePacket(data, 2);
+    if (p) { render(p); rateTicks++; }
+  };
+  demo = setInterval(tick, Math.max(50, cfg.pollMs || 50));
+  tick();
+}
+
+
+
+/* ── Wiring ───────────────────────────────────────────────── */
+
+els.conn.addEventListener("click", () => {
+  if (demo) { toggleDemo(); return; }
+  if (session) { disconnect(); setStatus(helpText()); }
+  else connect();
+});
+
+els.min.addEventListener("click", () => {
+  const on = app.classList.toggle("min");
+  document.body.classList.toggle("bare", on);
+  els.min.classList.toggle("active", on);
+  requestAnimationFrame(trace.resize);
+});
+
+load();
+buildSettings();
+clearReadout();
+setStatus(helpText());
+</script>
+</body>
+</html>
