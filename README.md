@@ -5,12 +5,10 @@ A vibe-coded web-based interface for the Alientek DM40 multimeter (DM40A / DM40B
 Turn on Bluetooth from the meter's Settings → Other Settings, open the page in Chrome, and click Connect!
 
 ## Demo
+https://github.com/user-attachments/assets/d0f1f5a4-dec4-40a7-8898-e4d11bc1aab7
 
-Watch the video:
 
-<!-- TODO: video link + thumbnail here -->
-
-If you have a DM40, open Chrome and go to **TODO: github pages link** to try it yourself.
+If you have a DM40, open Chrome and go to https://scottbez1.github.io/webdm40/ to try it yourself.
 
 ## What it does
 
